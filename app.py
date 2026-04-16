@@ -5,15 +5,21 @@ from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
 from threading import Thread
 import requests
 import os
+#from dotenv import load_dotenv
+
 # ======================
-# إعداد Facebook
-# ======================
+# ENV
+# =====================
+
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 verify_token = os.getenv("VERIFY_TOKEN")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 bot_username = "mysudan1bot"
 
+# ======================
+# Telegram
+# ======================
 tg_loop = asyncio.new_event_loop()
 asyncio.set_event_loop(tg_loop)
 
@@ -28,7 +34,7 @@ last_psid = None
 user_mode = {}
 
 # ======================
-# إرسال إلى Facebook
+# Facebook Send
 # ======================
 def send_to_facebook(text):
     if not last_psid:
@@ -36,12 +42,11 @@ def send_to_facebook(text):
         return
 
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
-    data = {
+
+    requests.post(url, json={
         "recipient": {"id": last_psid},
-        "message": {"text": text}
-    }
-    r = requests.post(url, json=data)
-    print("FB:", r.json())
+        "message": {"text": str(text)}
+    })
 
 # ======================
 # Telegram Events
@@ -52,27 +57,25 @@ async def handle_message(event):
     global last_message, current_buttons
 
     sender = await event.get_sender()
-    username = sender.username if sender.username else sender.first_name
 
-    if username != bot_username:
+    # ✅ الحل الصحيح
+    if not getattr(sender, "username", None) or sender.username.lower() != bot_username.lower():
         return
 
     last_message = event.message
     current_buttons = []
 
-    msg = f"📩 من Telegram:\n{event.message.text}\n"
+    text = event.message.text or ""
+    msg = f"📩 من Telegram:\n{text}\n"
 
     if event.message.buttons:
         buttons_temp = []
 
-        # جمع الأزرار
         for row in event.message.buttons:
             for btn in row:
                 buttons_temp.append(btn)
 
-        # 🔥 ترتيب أبجدي
         buttons_temp.sort(key=lambda b: b.text.lower())
-
         current_buttons = buttons_temp
 
         msg += "\n🔘 الأزرار:\n"
@@ -82,7 +85,7 @@ async def handle_message(event):
     send_to_facebook(msg)
 
 # ======================
-# وظائف Telegram
+# Telegram Functions
 # ======================
 async def send_text_to_tg(text):
     await client.send_message(bot_username, text)
@@ -92,7 +95,7 @@ async def show_last_message():
         send_to_facebook("❌ لا توجد رسالة")
         return
 
-    msg = f"📩 آخر رسالة:\n{last_message.text}\n"
+    msg = f"📩 آخر رسالة:\n{last_message.text or ''}\n"
 
     if current_buttons:
         msg += "\n🔘 الأزرار:\n"
@@ -136,7 +139,6 @@ async def press_button_by_text(text):
 # ======================
 app = Flask(__name__)
 
-# تحقق Webhook
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
     mode = request.args.get("hub.mode")
@@ -144,11 +146,9 @@ def verify_webhook():
     challenge = request.args.get("hub.challenge")
 
     if mode == "subscribe" and token == verify_token:
-        print("✅ VERIFIED")
         return challenge, 200
     return "Verification failed", 403
 
-# استقبال الرسائل
 @app.route("/webhook", methods=["POST"])
 def webhook():
     global last_psid
@@ -168,7 +168,6 @@ def webhook():
 
                     print("FB:", text)
 
-                    # ===== الأوامر =====
                     if text == "1":
                         user_mode[sender_id] = "send_text"
                         send_to_facebook("✏️ ارسل النص")
@@ -184,7 +183,6 @@ def webhook():
                         user_mode[sender_id] = None
                         send_to_facebook("👋 خروج")
 
-                    # ===== الحالات =====
                     elif mode == "send_text":
                         asyncio.run_coroutine_threadsafe(
                             send_text_to_tg(text),
@@ -193,12 +191,12 @@ def webhook():
                         send_to_facebook("✅ تم الإرسال")
 
                     elif mode == "choose_button":
-                        if text.isdigit():
+                        if text and text.isdigit():
                             asyncio.run_coroutine_threadsafe(
                                 press_button_by_index(int(text)),
                                 tg_loop
                             )
-                        else:
+                        elif text:
                             asyncio.run_coroutine_threadsafe(
                                 press_button_by_text(text),
                                 tg_loop
@@ -212,9 +210,11 @@ def webhook():
 async def start():
     await client.start()
     print("✅ Telegram Ready")
+
 if __name__ == "__main__":
     tg_loop.run_until_complete(start())
 
+    # ✅ مهم لـ Render
     port = int(os.environ.get("PORT", 10000))
 
     Thread(
