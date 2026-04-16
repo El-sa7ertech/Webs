@@ -1,251 +1,174 @@
 import asyncio
-import os
-import time
 from flask import Flask, request
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
 from threading import Thread
-from queue import Queue
 import requests
+import os
 
-# ========= ENV =========
+# ======================
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
-PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_TOKEN")
+PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
+
 bot_username = "mysudan1bot"
 
-# ========= Queue =========
-task_queue = Queue()
-
-# ========= Telegram =========
+# ======================
 tg_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(tg_loop)
+
 client = TelegramClient("session", api_id, api_hash, loop=tg_loop)
 
-# ========= State =========
-last_message = None
-current_buttons = []
-last_psid = None
+# ======================
+# لكل مستخدم بيانات منفصلة 🔥
+# ======================
+users = {}
 
-user_mode = {}
-user_state = {}
+def get_user(psid):
+    if psid not in users:
+        users[psid] = {
+            "mode": None,
+            "buttons": [],
+            "last_message": None
+        }
+    return users[psid]
 
-tg_ready = False
-
-# ========= Facebook =========
+# ======================
 def send_to_facebook(psid, text):
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
-    try:
-        requests.post(url, json={
-            "recipient": {"id": psid},
-            "message": {"text": text}
-        })
-    except Exception as e:
-        print("FB error:", e)
+    requests.post(url, json={
+        "recipient": {"id": psid},
+        "message": {"text": text}
+    })
 
-# ========= MENU =========
-MENU = {
-    "main": {
-        "title": "🏠 القائمة الرئيسية",
-        "buttons": {
-            "1": {"text": "📩 خدمات", "next": "services"},
-            "2": {"text": "⚙️ إعدادات", "next": "settings"}
-        }
-    },
-    "services": {
-        "title": "📩 الخدمات",
-        "buttons": {
-            "1": {"text": "✏️ إرسال", "action": "send"},
-            "2": {"text": "📨 آخر رسالة", "action": "last"},
-            "3": {"text": "🔘 أزرار Telegram", "action": "buttons"},
-            "0": {"text": "⬅️ رجوع", "next": "main"}
-        }
-    }
-}
-
-def build_menu(node):
-    data = MENU[node]
-    text = data["title"] + "\n\n"
-    for k, v in data["buttons"].items():
-        text += f"{k} - {v['text']}\n"
-    return text
-
-def handle_menu(psid, choice):
-    current = user_state.get(psid, "main")
-    node = MENU[current]
-
-    if choice not in node["buttons"]:
-        return "error"
-
-    btn = node["buttons"][choice]
-
-    if "next" in btn:
-        user_state[psid] = btn["next"]
-        return btn["next"]
-
-    if "action" in btn:
-        return btn["action"]
-
-# ========= Telegram events =========
+# ======================
 @client.on(events.NewMessage)
 @client.on(events.MessageEdited)
 async def handle_message(event):
-    global last_message, current_buttons
 
-    try:
-        sender = await event.get_sender()
-        username = sender.username if sender.username else sender.first_name
+    sender = await event.get_sender()
+    username = sender.username or sender.first_name
 
-        if username != bot_username:
-            return
+    if username != bot_username:
+        return
 
-        last_message = event.message
-        current_buttons = []
+    psid = "fb_user"  # لا تعتمد على global
 
-        msg = f"📩 {event.message.text}\n"
+    user = get_user(psid)
 
-        if event.message.buttons:
-            for row in event.message.buttons:
-                for btn in row:
-                    current_buttons.append(btn)
+    user["last_message"] = event.message
+    user["buttons"] = []
 
-            msg += "\n🔘 الأزرار:\n"
-            for i, btn in enumerate(current_buttons):
-                msg += f"{i} - {btn.text}\n"
+    msg = f"📩 {event.message.text}\n"
 
-        if last_psid:
-            send_to_facebook(last_psid, msg)
+    if event.message.buttons:
+        temp = []
 
-    except Exception as e:
-        print("Telegram error:", e)
+        for row in event.message.buttons:
+            for btn in row:
+                temp.append(btn)
 
-# ========= Telegram actions =========
+        temp.sort(key=lambda b: b.text.lower())
+        user["buttons"] = temp
+
+        msg += "\n🔘 الأزرار:\n"
+        for i, b in enumerate(temp):
+            msg += f"{i} - {b.text}\n"
+
+    send_to_facebook(psid, msg)
+
+# ======================
 async def send_text(text):
     await client.send_message(bot_username, text)
 
-async def press_button(index):
-    if not last_message or index >= len(current_buttons):
-        if last_psid:
-            send_to_facebook(last_psid, "❌ اختيار غير صحيح")
+async def press_button(psid, index):
+    user = get_user(psid)
+
+    if index >= len(user["buttons"]):
+        send_to_facebook(psid, "❌ خطأ")
         return
 
-    btn = current_buttons[index]
+    btn = user["buttons"][index]
 
     await client(GetBotCallbackAnswerRequest(
-        peer=last_message.to_id,
-        msg_id=last_message.id,
+        peer=user["last_message"].to_id,
+        msg_id=user["last_message"].id,
         data=btn.data
     ))
 
-    send_to_facebook(last_psid, f"✅ اخترت {btn.text}")
+    send_to_facebook(psid, f"✅ {btn.text}")
 
-# ========= Worker =========
-def queue_worker():
-    while True:
-        task = task_queue.get()
-        try:
-            if task["type"] == "text":
-                asyncio.run_coroutine_threadsafe(
-                    send_text(task["data"]), tg_loop
-                )
-            elif task["type"] == "button":
-                asyncio.run_coroutine_threadsafe(
-                    press_button(task["data"]), tg_loop
-                )
-        except Exception as e:
-            print("Worker error:", e)
-
-# ========= Flask =========
+# ======================
 app = Flask(__name__)
 
 @app.route("/webhook", methods=["GET"])
 def verify():
     if request.args.get("hub.verify_token") == VERIFY_TOKEN:
         return request.args.get("hub.challenge"), 200
-    return "Error", 403
+    return "403", 403
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    global last_psid
 
     data = request.get_json()
 
     if data.get("object") == "page":
-        for entry in data.get("entry", []):
-            for msg in entry.get("messaging", []):
+        for entry in data["entry"]:
+            for msg in entry["messaging"]:
 
-                if "message" in msg:
-                    psid = msg["sender"]["id"]
-                    text = msg["message"].get("text")
+                psid = msg["sender"]["id"]
+                user = get_user(psid)
 
-                    last_psid = psid
+                text = msg["message"].get("text")
 
-                    # أول دخول
-                    if psid not in user_state:
-                        user_state[psid] = "main"
-                        send_to_facebook(psid, build_menu("main"))
-                        return "OK", 200
+                # ===== أوامر =====
+                if text == "1":
+                    user["mode"] = "send"
+                    send_to_facebook(psid, "✏️ ارسل النص")
 
-                    mode = user_mode.get(psid)
+                elif text == "2":
+                    lm = user["last_message"]
+                    if lm:
+                        send_to_facebook(psid, lm.text)
+                    else:
+                        send_to_facebook(psid, "لا توجد رسالة")
 
-                    # 🔥 إذا Telegram غير جاهز
-                    if not tg_ready:
-                        send_to_facebook(psid, "⏳ جاري تشغيل النظام... أعد الإرسال بعد ثواني")
-                        return "OK", 200
+                elif text == "3":
+                    user["mode"] = "buttons"
+                    send_to_facebook(psid, "🔢 اختر رقم")
 
-                    # أوضاع
-                    if mode == "send":
-                        task_queue.put({"type": "text", "data": text})
-                        user_mode[psid] = None
-                        return "OK", 200
+                elif text == "4":
+                    user["mode"] = None
+                    send_to_facebook(psid, "👋 خروج")
 
-                    if mode == "buttons" and text.isdigit():
-                        task_queue.put({"type": "button", "data": int(text)})
-                        user_mode[psid] = None
-                        return "OK", 200
+                # ===== حالات =====
+                elif user["mode"] == "send":
+                    asyncio.run_coroutine_threadsafe(
+                        send_text(text), tg_loop
+                    )
 
-                    # menu
-                    result = handle_menu(psid, text)
-
-                    if result == "error":
-                        send_to_facebook(psid, "❌ خيار غير صحيح")
-                        return "OK", 200
-
-                    if result in MENU:
-                        send_to_facebook(psid, build_menu(result))
-
-                    elif result == "send":
-                        user_mode[psid] = "send"
-                        send_to_facebook(psid, "✏️ ارسل النص")
-
-                    elif result == "last":
-                        if last_message:
-                            send_to_facebook(psid, f"📨 {last_message.text}")
-                        else:
-                            send_to_facebook(psid, "🚫 لا توجد رسائل")
-
-                    elif result == "buttons":
-                        user_mode[psid] = "buttons"
-                        send_to_facebook(psid, "🔢 اختر رقم الزر")
+                elif user["mode"] == "buttons":
+                    if text.isdigit():
+                        asyncio.run_coroutine_threadsafe(
+                            press_button(psid, int(text)),
+                            tg_loop
+                        )
 
     return "OK", 200
 
-# ========= Start =========
+# ======================
 async def start():
-    global tg_ready
     await client.start()
-    tg_ready = True
     print("Telegram Ready")
 
 if __name__ == "__main__":
     tg_loop.run_until_complete(start())
 
-    Thread(target=queue_worker, daemon=True).start()
-
     Thread(target=lambda: app.run(
         host="0.0.0.0",
-        port=int(os.getenv("PORT", 5000)),
-        debug=False
+        port=int(os.getenv("PORT", 5000))
     ), daemon=True).start()
 
     tg_loop.run_forever()
