@@ -5,7 +5,7 @@ from threading import Thread
 from queue import Queue
 import os
 
-# ========= إعدادات =========
+# ========= ENV =========
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 
@@ -21,7 +21,7 @@ q = Queue()
 loop = asyncio.new_event_loop()
 client = TelegramClient("session", api_id, api_hash, loop=loop)
 
-# ========= إرسال Telegram =========
+# ========= Telegram send =========
 async def send_to_tg(text):
     await client.send_message(bot_username, text)
 
@@ -43,27 +43,30 @@ def verify():
 def webhook():
     data = request.get_json()
 
+    print("📩 FB RAW:", data)  # 🔥 مهم للتأكد
+
     if data.get("object") == "page":
-        for entry in data["entry"]:
-            for event in entry["messaging"]:
+        for entry in data.get("entry", []):
+            for event in entry.get("messaging", []):
 
-                if "message" in event:
-                    text = event["message"].get("text")
+                msg = event.get("message", {})
+                text = msg.get("text")
 
-                    if text:
-                        q.put(text)   # 🔥 فقط إرسال إلى queue
+                if text:
+                    print("➡️ QUEUE:", text)
+                    q.put(text)
 
     return "OK", 200
 
 # ========= تشغيل =========
 async def start():
     await client.start()
-    print("Telegram Ready")
+    print("✅ Telegram Ready")
 
 if __name__ == "__main__":
     loop.run_until_complete(start())
 
     Thread(target=worker, daemon=True).start()
-    Thread(target=lambda: app.run(host="0.0.0.0", port=5000), daemon=True).start()
+    Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000))), daemon=True).start()
 
     loop.run_forever()
