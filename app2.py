@@ -15,7 +15,7 @@ api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 verify_token = os.getenv("VERIFY_TOKEN")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
-bot_username = "mysudan1bot"
+bot_username = "chatgpt"
 
 # ======================
 # Telegram
