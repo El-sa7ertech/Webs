@@ -1,5 +1,5 @@
 import asyncio
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
 from threading import Thread
@@ -20,14 +20,13 @@ bot_username = "chatgpt"
 # Telegram Setup
 # ======================
 tg_loop = asyncio.new_event_loop()
-asyncio.set_event_loop(tg_loop)
-
+# Note: we'll run this loop in a dedicated thread
 client = TelegramClient("session", api_id, api_hash, loop=tg_loop)
 
 # ======================
 # الحالة
 # ======================
-last_messages = []
+last_messages = []  # each item: {"msg": event.message, "buttons": [Button, ...]}
 last_psid = None
 user_mode = {}
 
@@ -38,6 +37,7 @@ def split_message(text, limit=1800):
     return [text[i:i+limit] for i in range(0, len(text), limit)]
 
 def send_to_facebook(text):
+    global last_psid
     if not last_psid:
         print("❌ لا يوجد مستخدم")
         return
@@ -102,7 +102,7 @@ async def handle_new(event):
             for btn in row:
                 buttons.append(btn)
 
-        buttons.sort(key=lambda b: b.text.lower())
+        buttons.sort(key=lambda b: (getattr(b, "text", "") or "").lower())
         msg_obj["buttons"] = buttons
 
     last_messages.append(msg_obj)
@@ -114,8 +114,11 @@ async def handle_new(event):
     if msg_obj["buttons"]:
         msg += "\n🔘 الأزرار:\n"
         for btn in msg_obj["buttons"]:
-            msg += f"- {btn.text}\n"
+            # btn.text may be None for some button types
+            btn_text = getattr(btn, "text", "") or ""
+            msg += f"- {btn_text}\n"
 
+    # إرسال للفايسبوك
     send_to_facebook(msg)
 
 # ======================
@@ -142,7 +145,7 @@ async def handle_edit(event):
             for btn in row:
                 buttons.append(btn)
 
-        buttons.sort(key=lambda b: b.text.lower())
+        buttons.sort(key=lambda b: (getattr(b, "text", "") or "").lower())
         msg_obj["buttons"] = buttons
 
     last_messages[-1] = msg_obj
@@ -160,107 +163,161 @@ async def show_last_messages():
 
     for i, item in enumerate(last_messages):
         m = item["msg"]
-        msg += f"{i+1}- {m.text or ''}\n"
-
+        content = m.text or m.message or m.raw_text or ""
+        msg += f"{i+1}- {content}\n"
         if item["buttons"]:
-            msg += "🔘 الأزرار:\n"
-            for btn in item["buttons"]:
-                msg += f"- {btn.text}\n"
-
+            msg += "   🔘 أزرار:\n"
+            for b in item["buttons"]:
+                bt = getattr(b, "text", "") or ""
+                msg += f"     - {bt}\n"
         msg += "\n"
 
     send_to_facebook(msg)
 
 # ======================
-async def press_button_by_text(text):
-    text = text.lower()
-
-    for msg_obj in reversed(last_messages):
-        for btn in msg_obj["buttons"]:
-            if btn.text.lower() == text:
-                await client(GetBotCallbackAnswerRequest(
-                    peer=msg_obj["msg"].to_id,
-                    msg_id=msg_obj["msg"].id,
-                    data=btn.data
-                ))
-
-                send_to_facebook(f"✅ ضغطت: {btn.text}")
-                return
-
-    send_to_facebook("❌ الزر غير موجود")
+# Helper to schedule coroutine on tg_loop from other threads
+def run_async(coro):
+    try:
+        tg_loop.call_soon_threadsafe(asyncio.ensure_future, coro)
+    except Exception as e:
+        print("Error scheduling coroutine:", e)
 
 # ======================
+# Handling button presses coming from Facebook
+async def handle_fb_button_press(payload):
+    global last_messages
+    # Try to match the payload to a button text (case-insensitive)
+    payload_norm = (payload or "").strip().lower()
+
+    if not payload_norm:
+        send_to_facebook("❌ لا يوجد حمل صالح")
+        return
+
+    # Search from newest to oldest for a matching button
+    for item in reversed(last_messages):
+        m = item["msg"]
+        for btn in item["buttons"]:
+            btn_text = (getattr(btn, "text", "") or "").strip()
+            if not btn_text:
+                continue
+            if btn_text.lower() == payload_norm:
+                # Found a match
+                try:
+                    # If the button carries callback data, use GetBotCallbackAnswerRequest
+                    data = getattr(btn, "data", None)
+                    url = getattr(btn, "url", None)
+                    if data:
+                        try:
+                            input_peer = await client.get_input_entity(bot_username)
+                            # Message id to use:
+                            msg_id = m.id
+                            print("Calling GetBotCallbackAnswerRequest:", msg_id, data)
+                            res = await client(GetBotCallbackAnswerRequest(input_peer, msg_id, data))
+                            # The result may not contain textual reply; we acknowledge
+                            send_to_facebook(f"✅ تم الضغط على الزر: {btn_text}")
+                            # If Telegram returns some alert/text inside res, try to display it
+                            try:
+                                reply_text = getattr(res, "message", None) or getattr(res, "alert", None) or None
+                                if reply_text:
+                                    send_to_facebook(f"رد من التلجرام:\n{reply_text}")
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            print("Error sending callback request:", e)
+                            # Fallback: send button text as message
+                            await client.send_message(bot_username, btn_text)
+                            send_to_facebook(f"✅ تم إرسال نص الزر كرسالة لأن الضغط المباشر فشل: {btn_text}")
+                    elif url:
+                        send_to_facebook(f"🔗 هذا زر رابط:\n{url}")
+                    else:
+                        # No data -> it's likely a regular button; just send its text
+                        await client.send_message(bot_username, btn_text)
+                        send_to_facebook(f"✅ تم إرسال نص الزر: {btn_text}")
+                except Exception as ex:
+                    print("Error handling button press:", ex)
+                    send_to_facebook("❌ حدث خطأ أثناء الضغط على الزر")
+                return
+
+    # If we reach here, no matching button was found; send the payload as text to the bot
+    try:
+        await client.send_message(bot_username, payload)
+        send_to_facebook(f"✅ تم إرسال: {payload}")
+    except Exception as e:
+        print("Error forwarding payload as text:", e)
+        send_to_facebook("❌ فشل إرسال الرسالة إلى التلجرام")
+
+# ======================
+# Flask App (Facebook webhook)
 app = Flask(__name__)
 
-@app.route("/")
-def home():
-    return "Server is running"
-
 @app.route("/webhook", methods=["GET"])
-def verify_webhook():
-    if request.args.get("hub.verify_token") == verify_token:
-        return request.args.get("hub.challenge"), 200
-    return "error", 403
+def verify():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if mode == "subscribe" and token == verify_token:
+        return challenge, 200
+    return "Verification token mismatch", 403
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     global last_psid
+    data = request.get_json()
 
-    data = request.get_json(force=True)
-
-    if data.get("object") == "page":
-        for entry in data.get("entry", []):
-            for msg in entry.get("messaging", []):
-
-                if "message" not in msg:
+    # Facebook may send batch entries
+    try:
+        entries = data.get("entry", [])
+        for entry in entries:
+            messaging = entry.get("messaging", [])
+            for m in messaging:
+                sender = m.get("sender", {}).get("id")
+                if not sender:
                     continue
+                last_psid = sender  # update global last_psid
 
-                sender_id = msg.get("sender", {}).get("id")
-                text = msg["message"].get("text")
+                # Handle postback (button press from FB)
+                if m.get("postback"):
+                    payload = m["postback"].get("payload")
+                    if payload:
+                        run_async(handle_fb_button_press(payload))
+                        continue
 
-                last_psid = sender_id
-                mode = user_mode.get(sender_id)
+                # Handle quick_reply
+                if m.get("message", {}).get("quick_reply"):
+                    payload = m["message"]["quick_reply"].get("payload")
+                    if payload:
+                        run_async(handle_fb_button_press(payload))
+                        continue
 
-                print("\n========== FACEBOOK INPUT ==========")
-                print("TEXT:", text)
+                # Handle text message
+                if m.get("message") and "text" in m["message"]:
+                    text = m["message"]["text"]
+                    # A simple command to show last messages
+                    if text.strip().lower() in ["/last", "last", "آخر", "آخر 3", "show last"]:
+                        run_async(show_last_messages())
+                    else:
+                        run_async(send_text_to_tg(text))
+    except Exception as e:
+        print("Error handling webhook POST:", e)
 
-                if text == "1":
-                    user_mode[sender_id] = "send_text"
-                    send_to_facebook("✏️ ارسل النص")
-
-                elif text == "2":
-                    asyncio.run_coroutine_threadsafe(show_last_messages(), tg_loop)
-
-                elif text == "3":
-                    user_mode[sender_id] = "choose_button"
-                    send_to_facebook("🔘 اكتب اسم الزر")
-
-                elif text == "4":
-                    user_mode[sender_id] = None
-                    send_to_facebook("👋 خروج")
-
-                elif mode == "send_text":
-                    asyncio.run_coroutine_threadsafe(send_text_to_tg(text), tg_loop)
-                    send_to_facebook("✅ تم الإرسال")
-
-                elif mode == "choose_button":
-                    asyncio.run_coroutine_threadsafe(press_button_by_text(text), tg_loop)
-
-    return "OK", 200
+    return jsonify({"status": "ok"}), 200
 
 # ======================
-async def start():
-    await client.start()
-    print("✅ Telegram Ready")
+# Start Telethon client in a separate thread
+def start_telegram_client():
+    asyncio.set_event_loop(tg_loop)
+    try:
+        tg_loop.run_until_complete(client.start())
+        print("Telegram client started")
+        tg_loop.run_until_complete(client.run_until_disconnected())
+    except Exception as e:
+        print("Telegram client error:", e)
 
+tg_thread = Thread(target=start_telegram_client, daemon=True)
+tg_thread.start()
+
+# ======================
+# Start Flask app (main thread)
 if __name__ == "__main__":
-    tg_loop.run_until_complete(start())
-
-    port = int(os.environ.get("PORT", 10000))
-
-    Thread(
-        target=lambda: app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False),
-        daemon=True
-    ).start()
-
-    tg_loop.run_forever()
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
