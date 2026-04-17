@@ -14,10 +14,10 @@ api_hash = os.getenv("API_HASH")
 verify_token = os.getenv("VERIFY_TOKEN")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 
-bot_username = "chatgpt"  # 👈 اسم البوت بدون @
+bot_username = "chatgpt"  # للإرسال فقط
 
 # ======================
-# Telegram
+# Telegram Setup
 # ======================
 tg_loop = asyncio.new_event_loop()
 asyncio.set_event_loop(tg_loop)
@@ -27,12 +27,12 @@ client = TelegramClient("session", api_id, api_hash, loop=tg_loop)
 # ======================
 # الحالة
 # ======================
-last_messages = []
+last_messages = []  # آخر 3 رسائل
 last_psid = None
 user_mode = {}
 
 # ======================
-# Facebook
+# Facebook Send
 # ======================
 def send_to_facebook(text):
     if not last_psid:
@@ -53,18 +53,10 @@ def send_to_facebook(text):
 async def handle_new(event):
     global last_messages
 
-    # ❌ تجاهل الجروبات
-    if not event.is_private:
-        return
+    sender = await event.get_sender()
 
-    chat = await event.get_chat()
-
-    # ❌ لازم يكون عنده username
-    if not getattr(chat, "username", ""):
-        return
-
-    # ❌ فلترة فقط البوت المحدد
-    if chat.username.lower() != bot_username.lower():
+    # نأخذ فقط رسائل البوت
+    if not sender.bot:
         return
 
     msg_obj = {
@@ -82,7 +74,7 @@ async def handle_new(event):
         buttons.sort(key=lambda b: b.text.lower())
         msg_obj["buttons"] = buttons
 
-    # حفظ آخر 3 رسائل
+    # حفظ الرسائل (حد أقصى 3)
     last_messages.append(msg_obj)
     if len(last_messages) > 3:
         last_messages.pop(0)
@@ -98,20 +90,14 @@ async def handle_new(event):
 
     send_to_facebook(msg)
 
-# دعم الرسائل المعدلة
+# تحديث الرسالة بدل إضافتها
 @client.on(events.MessageEdited)
 async def handle_edit(event):
     global last_messages
 
-    if not event.is_private:
-        return
+    sender = await event.get_sender()
 
-    chat = await event.get_chat()
-
-    if not getattr(chat, "username", ""):
-        return
-
-    if chat.username.lower() != bot_username.lower():
+    if not sender.bot:
         return
 
     if not last_messages:
@@ -141,13 +127,12 @@ async def send_text_to_tg(text):
 
 async def show_last_messages():
     if not last_messages:
-        send_to_facebook("❌ لا توجد رسائل من البوت")
+        send_to_facebook("❌ لا توجد رسائل")
         return
 
-    msg = "📩 آخر 3 رسائل من البوت:\n\n"
+    msg = "📩 آخر 3 رسائل:\n\n"
 
-    # الأحدث أولاً
-    for i, item in enumerate(reversed(last_messages)):
+    for i, item in enumerate(last_messages):
         m = item["msg"]
         msg += f"{i+1}- {m.text or ''}\n"
 
@@ -222,8 +207,7 @@ def webhook():
 
                     elif text == "2":
                         asyncio.run_coroutine_threadsafe(
-                            show_last_messages(),
-                            tg_loop
+                            show_last_messages(), tg_loop
                         )
 
                     elif text == "3":
@@ -236,8 +220,7 @@ def webhook():
 
                     elif mode == "send_text":
                         asyncio.run_coroutine_threadsafe(
-                            send_text_to_tg(text),
-                            tg_loop
+                            send_text_to_tg(text), tg_loop
                         )
                         send_to_facebook("✅ تم الإرسال")
 
