@@ -32,8 +32,11 @@ last_psid = None
 user_mode = {}
 
 # ======================
-# Facebook Send
+# 🔥 إصلاح الرسائل الطويلة فقط
 # ======================
+def split_message(text, limit=1800):
+    return [text[i:i+limit] for i in range(0, len(text), limit)]
+
 def send_to_facebook(text):
     if not last_psid:
         print("❌ لا يوجد مستخدم")
@@ -41,10 +44,14 @@ def send_to_facebook(text):
 
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
 
-    requests.post(url, json={
-        "recipient": {"id": last_psid},
-        "message": {"text": str(text)}
-    })
+    # 🔥 تقسيم الرسالة فقط
+    parts = split_message(text)
+
+    for part in parts:
+        requests.post(url, json={
+            "recipient": {"id": last_psid},
+            "message": {"text": str(part)}
+        })
 
 # ======================
 # Telegram Events
@@ -90,7 +97,9 @@ async def handle_new(event):
 
     send_to_facebook(msg)
 
+# ======================
 # تحديث الرسالة بدل إضافتها
+# ======================
 @client.on(events.MessageEdited)
 async def handle_edit(event):
     global last_messages
