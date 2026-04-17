@@ -27,7 +27,7 @@ client = TelegramClient("session", api_id, api_hash, loop=tg_loop)
 # ======================
 # الحالة
 # ======================
-last_messages = []  # آخر 3 رسائل
+last_messages = []
 last_psid = None
 user_mode = {}
 
@@ -55,8 +55,8 @@ async def handle_new(event):
 
     sender = await event.get_sender()
 
-    # نأخذ فقط رسائل البوت
-    if not sender.bot:
+    # ❌ لا تعتمد على sender.bot (مهم)
+    if not sender:
         return
 
     msg_obj = {
@@ -74,7 +74,7 @@ async def handle_new(event):
         buttons.sort(key=lambda b: b.text.lower())
         msg_obj["buttons"] = buttons
 
-    # حفظ الرسائل (حد أقصى 3)
+    # حفظ آخر 3 رسائل
     last_messages.append(msg_obj)
     if len(last_messages) > 3:
         last_messages.pop(0)
@@ -90,14 +90,14 @@ async def handle_new(event):
 
     send_to_facebook(msg)
 
-# تحديث الرسالة بدل إضافتها
+# دعم الرسائل المعدلة
 @client.on(events.MessageEdited)
 async def handle_edit(event):
     global last_messages
 
     sender = await event.get_sender()
 
-    if not sender.bot:
+    if not sender:
         return
 
     if not last_messages:
@@ -117,6 +117,7 @@ async def handle_edit(event):
         buttons.sort(key=lambda b: b.text.lower())
         msg_obj["buttons"] = buttons
 
+    # استبدال آخر رسالة
     last_messages[-1] = msg_obj
 
 # ======================
@@ -130,9 +131,10 @@ async def show_last_messages():
         send_to_facebook("❌ لا توجد رسائل")
         return
 
-    msg = "📩 آخر 3 رسائل:\n\n"
+    msg = "📩 آخر 3 رسائل (الأحدث أولاً):\n\n"
 
-    for i, item in enumerate(last_messages):
+    # 🔥 الأحدث أولاً
+    for i, item in enumerate(reversed(last_messages)):
         m = item["msg"]
         msg += f"{i+1}- {m.text or ''}\n"
 
@@ -207,7 +209,8 @@ def webhook():
 
                     elif text == "2":
                         asyncio.run_coroutine_threadsafe(
-                            show_last_messages(), tg_loop
+                            show_last_messages(),
+                            tg_loop
                         )
 
                     elif text == "3":
@@ -220,7 +223,8 @@ def webhook():
 
                     elif mode == "send_text":
                         asyncio.run_coroutine_threadsafe(
-                            send_text_to_tg(text), tg_loop
+                            send_text_to_tg(text),
+                            tg_loop
                         )
                         send_to_facebook("✅ تم الإرسال")
 
