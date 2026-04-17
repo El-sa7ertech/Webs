@@ -13,10 +13,11 @@ api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 verify_token = os.getenv("VERIFY_TOKEN")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
-bot_username = "chatgpt"  # اختياري فقط للإرسال
+
+bot_username = "chatgpt"  # للإرسال فقط
 
 # ======================
-# Telegram
+# Telegram Setup
 # ======================
 tg_loop = asyncio.new_event_loop()
 asyncio.set_event_loop(tg_loop)
@@ -26,7 +27,7 @@ client = TelegramClient("session", api_id, api_hash, loop=tg_loop)
 # ======================
 # الحالة
 # ======================
-last_messages = []  # 🔥 آخر 3 رسائل
+last_messages = []  # آخر 3 رسائل
 last_psid = None
 user_mode = {}
 
@@ -54,7 +55,7 @@ async def handle_new(event):
 
     sender = await event.get_sender()
 
-    # ✔ نأخذ فقط رسائل البوتات
+    # نأخذ فقط رسائل البوت
     if not sender.bot:
         return
 
@@ -63,35 +64,33 @@ async def handle_new(event):
         "buttons": []
     }
 
-    # الأزرار
+    # استخراج الأزرار
     if event.message.buttons:
-        btns = []
+        buttons = []
         for row in event.message.buttons:
             for btn in row:
-                btns.append(btn)
+                buttons.append(btn)
 
-        btns.sort(key=lambda b: b.text.lower())
-        msg_obj["buttons"] = btns
+        buttons.sort(key=lambda b: b.text.lower())
+        msg_obj["buttons"] = buttons
 
-    # حفظ
+    # حفظ الرسائل (حد أقصى 3)
     last_messages.append(msg_obj)
-
     if len(last_messages) > 3:
         last_messages.pop(0)
 
-    # إرسال إلى فيسبوك
+    # إرسال لفايسبوك
     text = event.message.text or ""
     msg = f"📩 من Telegram:\n{text}\n"
 
     if msg_obj["buttons"]:
         msg += "\n🔘 الأزرار:\n"
-        for i, btn in enumerate(msg_obj["buttons"]):
-            msg += f"{i} - {btn.text}\n"
+        for btn in msg_obj["buttons"]:
+            msg += f"- {btn.text}\n"
 
     send_to_facebook(msg)
 
-
-# 🔥 مهم: تحديث الرسالة بدل إضافتها
+# تحديث الرسالة بدل إضافتها
 @client.on(events.MessageEdited)
 async def handle_edit(event):
     global last_messages
@@ -104,30 +103,27 @@ async def handle_edit(event):
     if not last_messages:
         return
 
-    # تحديث آخر رسالة فقط
     msg_obj = {
         "msg": event.message,
         "buttons": []
     }
 
     if event.message.buttons:
-        btns = []
+        buttons = []
         for row in event.message.buttons:
             for btn in row:
-                btns.append(btn)
+                buttons.append(btn)
 
-        btns.sort(key=lambda b: b.text.lower())
-        msg_obj["buttons"] = btns
+        buttons.sort(key=lambda b: b.text.lower())
+        msg_obj["buttons"] = buttons
 
     last_messages[-1] = msg_obj
-
 
 # ======================
 # Telegram Functions
 # ======================
 async def send_text_to_tg(text):
     await client.send_message(bot_username, text)
-
 
 async def show_last_messages():
     if not last_messages:
@@ -136,46 +132,45 @@ async def show_last_messages():
 
     msg = "📩 آخر 3 رسائل:\n\n"
 
-    for idx, item in enumerate(last_messages):
+    for i, item in enumerate(last_messages):
         m = item["msg"]
-        msg += f"{idx+1}- {m.text or ''}\n"
+        msg += f"{i+1}- {m.text or ''}\n"
 
         if item["buttons"]:
             msg += "🔘 الأزرار:\n"
-            for i, btn in enumerate(item["buttons"]):
-                msg += f"{i} - {btn.text}\n"
+            for btn in item["buttons"]:
+                msg += f"- {btn.text}\n"
 
         msg += "\n"
 
     send_to_facebook(msg)
 
+# الضغط بالاسم
+async def press_button_by_text(text):
+    text = text.lower()
 
-async def press_button(index):
-    if not last_messages:
-        send_to_facebook("❌ لا توجد رسائل")
-        return
+    for msg_obj in reversed(last_messages):
+        for btn in msg_obj["buttons"]:
+            if btn.text.lower() == text:
+                await client(GetBotCallbackAnswerRequest(
+                    peer=msg_obj["msg"].to_id,
+                    msg_id=msg_obj["msg"].id,
+                    data=btn.data
+                ))
 
-    last = last_messages[-1]
+                send_to_facebook(f"✅ ضغطت: {btn.text}")
+                return
 
-    if index >= len(last["buttons"]):
-        send_to_facebook("❌ رقم غير صحيح")
-        return
-
-    btn = last["buttons"][index]
-
-    await client(GetBotCallbackAnswerRequest(
-        peer=last["msg"].to_id,
-        msg_id=last["msg"].id,
-        data=btn.data
-    ))
-
-    send_to_facebook(f"✅ ضغطت: {btn.text}")
-
+    send_to_facebook("❌ الزر غير موجود")
 
 # ======================
 # Flask
 # ======================
 app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Server is running"
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -186,7 +181,6 @@ def verify_webhook():
     if mode == "subscribe" and token == verify_token:
         return challenge, 200
     return "Verification failed", 403
-
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -218,7 +212,7 @@ def webhook():
 
                     elif text == "3":
                         user_mode[sender_id] = "choose_button"
-                        send_to_facebook("🔢 ارسل رقم الزر")
+                        send_to_facebook("🔘 اكتب اسم الزر")
 
                     elif text == "4":
                         user_mode[sender_id] = None
@@ -231,13 +225,13 @@ def webhook():
                         send_to_facebook("✅ تم الإرسال")
 
                     elif mode == "choose_button":
-                        if text and text.isdigit():
+                        if text:
                             asyncio.run_coroutine_threadsafe(
-                                press_button(int(text)), tg_loop
+                                press_button_by_text(text),
+                                tg_loop
                             )
 
     return "OK", 200
-
 
 # ======================
 # تشغيل
@@ -245,7 +239,6 @@ def webhook():
 async def start():
     await client.start()
     print("✅ Telegram Ready")
-
 
 if __name__ == "__main__":
     tg_loop.run_until_complete(start())
