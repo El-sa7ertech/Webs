@@ -14,7 +14,7 @@ api_hash = os.getenv("API_HASH")
 verify_token = os.getenv("VERIFY_TOKEN")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 
-bot_username = "chatgpt"  # للإرسال فقط
+bot_username = "chatgpt"
 
 # ======================
 # Telegram Setup
@@ -27,12 +27,12 @@ client = TelegramClient("session", api_id, api_hash, loop=tg_loop)
 # ======================
 # الحالة
 # ======================
-last_messages = []  # آخر 3 رسائل
+last_messages = []
 last_psid = None
 user_mode = {}
 
 # ======================
-# 🔥 إصلاح الرسائل الطويلة فقط
+# 🔥 Debug + Split
 # ======================
 def split_message(text, limit=1800):
     return [text[i:i+limit] for i in range(0, len(text), limit)]
@@ -42,16 +42,29 @@ def send_to_facebook(text):
         print("❌ لا يوجد مستخدم")
         return
 
+    print("\n================ FACEBOOK DEBUG ================")
+    print("SEND LENGTH:", len(text))
+    print("PSID:", last_psid)
+
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
 
-    # 🔥 تقسيم الرسالة فقط
     parts = split_message(text)
 
-    for part in parts:
-        requests.post(url, json={
-            "recipient": {"id": last_psid},
-            "message": {"text": str(part)}
-        })
+    for i, part in enumerate(parts):
+        print(f"\n--- Sending part {i+1} ---")
+        print("PART LENGTH:", len(part))
+        print("PART SAMPLE:", part[:200])
+
+        try:
+            r = requests.post(url, json={
+                "recipient": {"id": last_psid},
+                "message": {"text": part}
+            })
+
+            print("Facebook Response:", r.status_code, r.text)
+
+        except Exception as e:
+            print("ERROR SENDING:", e)
 
 # ======================
 # Telegram Events
@@ -62,16 +75,27 @@ async def handle_new(event):
 
     sender = await event.get_sender()
 
-    # نأخذ فقط رسائل البوت
     if not sender.bot:
         return
+
+    # 🔥 استخراج النص بأكثر من طريقة (DEBUG)
+    text1 = event.message.text
+    text2 = event.message.message
+    text3 = event.message.raw_text
+
+    text = text2 or text1 or text3 or ""
+
+    print("\n================ TELEGRAM DEBUG ================")
+    print("TEXT:", text1)
+    print("MESSAGE:", text2)
+    print("RAW:", text3)
+    print("FINAL LENGTH:", len(text))
 
     msg_obj = {
         "msg": event.message,
         "buttons": []
     }
 
-    # استخراج الأزرار
     if event.message.buttons:
         buttons = []
         for row in event.message.buttons:
@@ -81,13 +105,10 @@ async def handle_new(event):
         buttons.sort(key=lambda b: b.text.lower())
         msg_obj["buttons"] = buttons
 
-    # حفظ الرسائل (حد أقصى 3)
     last_messages.append(msg_obj)
     if len(last_messages) > 3:
         last_messages.pop(0)
 
-    # إرسال لفايسبوك
-    text = event.message.text or ""
     msg = f"📩 من Telegram:\n{text}\n"
 
     if msg_obj["buttons"]:
@@ -97,8 +118,6 @@ async def handle_new(event):
 
     send_to_facebook(msg)
 
-# ======================
-# تحديث الرسالة بدل إضافتها
 # ======================
 @client.on(events.MessageEdited)
 async def handle_edit(event):
@@ -129,8 +148,6 @@ async def handle_edit(event):
     last_messages[-1] = msg_obj
 
 # ======================
-# Telegram Functions
-# ======================
 async def send_text_to_tg(text):
     await client.send_message(bot_username, text)
 
@@ -154,7 +171,7 @@ async def show_last_messages():
 
     send_to_facebook(msg)
 
-# الضغط بالاسم
+# ======================
 async def press_button_by_text(text):
     text = text.lower()
 
@@ -173,8 +190,6 @@ async def press_button_by_text(text):
     send_to_facebook("❌ الزر غير موجود")
 
 # ======================
-# Flask
-# ======================
 app = Flask(__name__)
 
 @app.route("/")
@@ -183,67 +198,56 @@ def home():
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-
-    if mode == "subscribe" and token == verify_token:
-        return challenge, 200
-    return "Verification failed", 403
+    if request.args.get("hub.verify_token") == verify_token:
+        return request.args.get("hub.challenge"), 200
+    return "error", 403
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     global last_psid
 
-    data = request.get_json()
+    data = request.get_json(force=True)
 
     if data.get("object") == "page":
-        for entry in data["entry"]:
-            for msg in entry["messaging"]:
+        for entry in data.get("entry", []):
+            for msg in entry.get("messaging", []):
 
-                if "message" in msg:
-                    sender_id = msg["sender"]["id"]
-                    text = msg["message"].get("text")
+                if "message" not in msg:
+                    continue
 
-                    last_psid = sender_id
-                    mode = user_mode.get(sender_id)
+                sender_id = msg.get("sender", {}).get("id")
+                text = msg["message"].get("text")
 
-                    print("FB:", text)
+                last_psid = sender_id
+                mode = user_mode.get(sender_id)
 
-                    if text == "1":
-                        user_mode[sender_id] = "send_text"
-                        send_to_facebook("✏️ ارسل النص")
+                print("\n========== FACEBOOK INPUT ==========")
+                print("TEXT:", text)
 
-                    elif text == "2":
-                        asyncio.run_coroutine_threadsafe(
-                            show_last_messages(), tg_loop
-                        )
+                if text == "1":
+                    user_mode[sender_id] = "send_text"
+                    send_to_facebook("✏️ ارسل النص")
 
-                    elif text == "3":
-                        user_mode[sender_id] = "choose_button"
-                        send_to_facebook("🔘 اكتب اسم الزر")
+                elif text == "2":
+                    asyncio.run_coroutine_threadsafe(show_last_messages(), tg_loop)
 
-                    elif text == "4":
-                        user_mode[sender_id] = None
-                        send_to_facebook("👋 خروج")
+                elif text == "3":
+                    user_mode[sender_id] = "choose_button"
+                    send_to_facebook("🔘 اكتب اسم الزر")
 
-                    elif mode == "send_text":
-                        asyncio.run_coroutine_threadsafe(
-                            send_text_to_tg(text), tg_loop
-                        )
-                        send_to_facebook("✅ تم الإرسال")
+                elif text == "4":
+                    user_mode[sender_id] = None
+                    send_to_facebook("👋 خروج")
 
-                    elif mode == "choose_button":
-                        if text:
-                            asyncio.run_coroutine_threadsafe(
-                                press_button_by_text(text),
-                                tg_loop
-                            )
+                elif mode == "send_text":
+                    asyncio.run_coroutine_threadsafe(send_text_to_tg(text), tg_loop)
+                    send_to_facebook("✅ تم الإرسال")
+
+                elif mode == "choose_button":
+                    asyncio.run_coroutine_threadsafe(press_button_by_text(text), tg_loop)
 
     return "OK", 200
 
-# ======================
-# تشغيل
 # ======================
 async def start():
     await client.start()
@@ -255,7 +259,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
 
     Thread(
-        target=lambda: app.run(host="0.0.0.0", port=port),
+        target=lambda: app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False),
         daemon=True
     ).start()
 
