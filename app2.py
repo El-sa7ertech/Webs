@@ -14,7 +14,7 @@ api_hash = os.getenv("API_HASH")
 verify_token = os.getenv("VERIFY_TOKEN")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 
-bot_username = "chatgpt"  # للإرسال فقط
+bot_username = "chatgpt"  # 👈 اسم البوت بدون @
 
 # ======================
 # Telegram
@@ -30,7 +30,6 @@ client = TelegramClient("session", api_id, api_hash, loop=tg_loop)
 last_messages = []
 last_psid = None
 user_mode = {}
-BOT_CHAT_ID = None  # 🔥 مهم
 
 # ======================
 # Facebook
@@ -52,17 +51,20 @@ def send_to_facebook(text):
 # ======================
 @client.on(events.NewMessage)
 async def handle_new(event):
-    global last_messages, BOT_CHAT_ID
+    global last_messages
+
+    # ❌ تجاهل الجروبات
+    if not event.is_private:
+        return
 
     chat = await event.get_chat()
 
-    # 🔥 أول مرة نحفظ الشات
-    if BOT_CHAT_ID is None:
-        BOT_CHAT_ID = chat.id
-        print("تم حفظ chat id:", BOT_CHAT_ID)
+    # ❌ لازم يكون عنده username
+    if not getattr(chat, "username", ""):
+        return
 
-    # ❗ فلترة حسب الشات
-    if chat.id != BOT_CHAT_ID:
+    # ❌ فلترة فقط البوت المحدد
+    if chat.username.lower() != bot_username.lower():
         return
 
     msg_obj = {
@@ -70,6 +72,7 @@ async def handle_new(event):
         "buttons": []
     }
 
+    # استخراج الأزرار
     if event.message.buttons:
         buttons = []
         for row in event.message.buttons:
@@ -79,10 +82,12 @@ async def handle_new(event):
         buttons.sort(key=lambda b: b.text.lower())
         msg_obj["buttons"] = buttons
 
+    # حفظ آخر 3 رسائل
     last_messages.append(msg_obj)
     if len(last_messages) > 3:
         last_messages.pop(0)
 
+    # إرسال لفايسبوك
     text = event.message.text or ""
     msg = f"📩 من Telegram:\n{text}\n"
 
@@ -93,13 +98,20 @@ async def handle_new(event):
 
     send_to_facebook(msg)
 
+# دعم الرسائل المعدلة
 @client.on(events.MessageEdited)
 async def handle_edit(event):
-    global last_messages, BOT_CHAT_ID
+    global last_messages
+
+    if not event.is_private:
+        return
 
     chat = await event.get_chat()
 
-    if chat.id != BOT_CHAT_ID:
+    if not getattr(chat, "username", ""):
+        return
+
+    if chat.username.lower() != bot_username.lower():
         return
 
     if not last_messages:
@@ -122,18 +134,19 @@ async def handle_edit(event):
     last_messages[-1] = msg_obj
 
 # ======================
-# Functions
+# Telegram Functions
 # ======================
 async def send_text_to_tg(text):
     await client.send_message(bot_username, text)
 
 async def show_last_messages():
     if not last_messages:
-        send_to_facebook("❌ لا توجد رسائل")
+        send_to_facebook("❌ لا توجد رسائل من البوت")
         return
 
     msg = "📩 آخر 3 رسائل من البوت:\n\n"
 
+    # الأحدث أولاً
     for i, item in enumerate(reversed(last_messages)):
         m = item["msg"]
         msg += f"{i+1}- {m.text or ''}\n"
@@ -147,6 +160,7 @@ async def show_last_messages():
 
     send_to_facebook(msg)
 
+# الضغط بالاسم
 async def press_button_by_text(text):
     text = text.lower()
 
@@ -175,9 +189,13 @@ def home():
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
-    if request.args.get("hub.verify_token") == verify_token:
-        return request.args.get("hub.challenge"), 200
-    return "error", 403
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    if mode == "subscribe" and token == verify_token:
+        return challenge, 200
+    return "Verification failed", 403
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -196,13 +214,16 @@ def webhook():
                     last_psid = sender_id
                     mode = user_mode.get(sender_id)
 
+                    print("FB:", text)
+
                     if text == "1":
                         user_mode[sender_id] = "send_text"
                         send_to_facebook("✏️ ارسل النص")
 
                     elif text == "2":
                         asyncio.run_coroutine_threadsafe(
-                            show_last_messages(), tg_loop
+                            show_last_messages(),
+                            tg_loop
                         )
 
                     elif text == "3":
@@ -215,13 +236,17 @@ def webhook():
 
                     elif mode == "send_text":
                         asyncio.run_coroutine_threadsafe(
-                            send_text_to_tg(text), tg_loop
+                            send_text_to_tg(text),
+                            tg_loop
                         )
+                        send_to_facebook("✅ تم الإرسال")
 
                     elif mode == "choose_button":
-                        asyncio.run_coroutine_threadsafe(
-                            press_button_by_text(text), tg_loop
-                        )
+                        if text:
+                            asyncio.run_coroutine_threadsafe(
+                                press_button_by_text(text),
+                                tg_loop
+                            )
 
     return "OK", 200
 
