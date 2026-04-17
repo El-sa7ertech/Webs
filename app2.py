@@ -14,7 +14,7 @@ api_hash = os.getenv("API_HASH")
 verify_token = os.getenv("VERIFY_TOKEN")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 
-bot_username = "chatgpt"  # للإرسال فقط
+bot_username = "chatgpt"  # 👈 غيره لاسم البوت
 
 # ======================
 # Telegram Setup
@@ -55,8 +55,8 @@ async def handle_new(event):
 
     sender = await event.get_sender()
 
-    # ❌ لا تعتمد على sender.bot (مهم)
-    if not sender:
+    # ✅ فلترة: فقط رسائل البوت المحدد
+    if getattr(sender, "username", "").lower() != bot_username.lower():
         return
 
     msg_obj = {
@@ -97,7 +97,7 @@ async def handle_edit(event):
 
     sender = await event.get_sender()
 
-    if not sender:
+    if getattr(sender, "username", "").lower() != bot_username.lower():
         return
 
     if not last_messages:
@@ -117,7 +117,6 @@ async def handle_edit(event):
         buttons.sort(key=lambda b: b.text.lower())
         msg_obj["buttons"] = buttons
 
-    # استبدال آخر رسالة
     last_messages[-1] = msg_obj
 
 # ======================
@@ -128,12 +127,12 @@ async def send_text_to_tg(text):
 
 async def show_last_messages():
     if not last_messages:
-        send_to_facebook("❌ لا توجد رسائل")
+        send_to_facebook("❌ لا توجد رسائل من البوت")
         return
 
-    msg = "📩 آخر 3 رسائل (الأحدث أولاً):\n\n"
+    msg = "📩 آخر 3 رسائل من البوت:\n\n"
 
-    # 🔥 الأحدث أولاً
+    # الأحدث أولاً
     for i, item in enumerate(reversed(last_messages)):
         m = item["msg"]
         msg += f"{i+1}- {m.text or ''}\n"
