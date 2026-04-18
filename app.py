@@ -23,7 +23,7 @@ bot_username = "mysudan1bot"
 tg_loop = asyncio.new_event_loop()
 asyncio.set_event_loop(tg_loop)
 
-client = TelegramClient("session", api_id, api_hash, loop=tg_loop)
+client = TelegramClient("session3", api_id, api_hash, loop=tg_loop)
 
 # ======================
 # الحالة
