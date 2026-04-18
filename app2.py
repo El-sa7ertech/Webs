@@ -22,7 +22,7 @@ bot_username = "chatgpt"  # للإرسال فقط
 tg_loop = asyncio.new_event_loop()
 asyncio.set_event_loop(tg_loop)
 
-client = TelegramClient("session", api_id, api_hash, loop=tg_loop)
+client = TelegramClient("session2", api_id, api_hash, loop=tg_loop)
 
 # ======================
 # الحالة
